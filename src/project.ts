@@ -1,17 +1,28 @@
-
-import { SceneLoader, Mesh, PBRMaterial, StandardMaterial, Material, VRExperienceHelper, Vector3, Scene, Engine, ArcRotateCamera, Light, HemisphericLight, CannonJSPlugin, MeshBuilder, StandardRenderingPipeline, Color3 } from '@babylonjs/core';
-import '@babylonjs/core/Debug/debugLayer'; // Augments the scene with the debug methods
-import '@babylonjs/inspector'; // Injects a local ES6 version of the inspector to prevent automatically relying on the none compatible version
+// Deep imports keep the bundle small; the non-".pure" modules also register their side effects
+import { Engine } from '@babylonjs/core/Engines/engine';
+import { Scene } from '@babylonjs/core/scene';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
+import { Light } from '@babylonjs/core/Lights/light';
+import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
+import { ImportMeshAsync } from '@babylonjs/core/Loading/sceneLoader';
+import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
+import { PhysicsAggregate } from '@babylonjs/core/Physics/v2/physicsAggregate';
+import { PhysicsShapeType } from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin';
+import '@babylonjs/core/Helpers/sceneHelpers'; // scene.createDefaultEnvironment
+import '@babylonjs/core/Physics/joinedPhysicsEngineComponent'; // scene.enablePhysics
+import '@babylonjs/core/Physics/v2/physicsEngineComponent';
 import '@babylonjs/loaders/glTF';
+import HavokPhysics from '@babylonjs/havok';
 
 
 export class Project {
 
     private _canvas: HTMLCanvasElement;
     private _engine: Engine;
-    private _scene: Scene;
-    private _camera: ArcRotateCamera;
-    private _light: Light;
+    private _scene!: Scene;
+    private _camera!: ArcRotateCamera;
+    private _light!: Light;
 
     constructor(canvasElement: string) {
         // Create canvas and engine
@@ -22,33 +33,36 @@ export class Project {
     /**
      * Creates the BABYLONJS Scene
      */
-    createScene(): void {
+    async createScene(): Promise<void> {
         // create a basic BJS Scene object
         this._scene = new Scene(this._engine);
-        // create a FreeCamera, and set its position to (x:0, y:5, z:-10)
+        // create an ArcRotateCamera orbiting around the origin
         this._camera = new ArcRotateCamera("Camera", 0, Math.PI / 3, 10, Vector3.Zero(), this._scene);
         this._camera.attachControl(this._canvas);
         this._camera.wheelPrecision = 100;
         this._camera.lowerRadiusLimit = 0.1;
         // create a basic light, aiming 0,1,0 - meaning, to the sky
         this._light = new HemisphericLight("light", new Vector3(0, 1, 0), this._scene);
-        this._scene.createDefaultEnvironment({createGround: true, createSkybox: true, setupImageProcessing: true});
+        const environment = this._scene.createDefaultEnvironment({createGround: true, createSkybox: true, setupImageProcessing: true});
 
-        SceneLoader.ImportMesh(null, '/assets/mesh/', 'princess.glb', this._scene, meshes => {
-            meshes[0].position.addInPlaceFromFloats(0, 0.06, 0);
-            meshes[0].rotate(Vector3.Up(), Math.PI);
+        // Havok physics engine (loads its wasm module asynchronously)
+        const havok = await HavokPhysics();
+        this._scene.enablePhysics(new Vector3(0, -9.81, 0), new HavokPlugin(true, havok));
+        if (environment?.ground) {
+            new PhysicsAggregate(environment.ground, PhysicsShapeType.BOX, { mass: 0 }, this._scene);
+        }
 
-        });
-     
-        // Physics engine also works
-        // let gravity = new Vector3(0, -0.9, 0);
-        // this._scene.enablePhysics(gravity, new CannonJSPlugin());
+        const { meshes } = await ImportMeshAsync('/assets/mesh/princess.glb', this._scene);
+        meshes[0].position.addInPlaceFromFloats(0, 0.06, 0);
+        meshes[0].rotate(Vector3.Up(), Math.PI);
 
-        // const vrHelper: VRExperienceHelper = this._scene.createDefaultVRExperience({defaultHeight: 1.6});
-        // vrHelper.enableTeleportation({floorMeshName: 'ground'});
+        // const xr = await this._scene.createDefaultXRExperienceAsync({floorMeshes: [environment.ground]});
 
-        this._scene.debugLayer.show();
-
+        if (process.env.NODE_ENV !== 'production') {
+            // Loaded on demand so the inspector stays out of the main bundle
+            const { ShowInspector } = await import('@babylonjs/inspector');
+            ShowInspector(this._scene);
+        }
     }
 
 
@@ -56,8 +70,8 @@ export class Project {
      * Starts the animation loop.
      */
     animate(): void {
-        this._scene.registerBeforeRender(() => {
-            let deltaTime: number = (1 / this._engine.getFps());
+        this._scene.onBeforeRenderObservable.add(() => {
+            let deltaTime: number = this._engine.getDeltaTime() / 1000;
         });
 
         // run the render loop
@@ -71,5 +85,5 @@ export class Project {
         });
     }
 
-  
+
 }
